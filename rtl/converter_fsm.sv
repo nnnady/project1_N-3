@@ -1,0 +1,178 @@
+module converter_fsm (
+    input  logic        clk,
+    input  logic        rst_n,
+    input  logic [15:0] apb_addr_i,
+    input  logic [31:0] apb_wdata_i,
+    input  logic [1:0]  apb_cmd_i,
+    input  logic        apb_start_req,
+    input  logic        apb_data_written_o,
+    input  logic        apb_rdata_pop,
+    output logic        apb_busy_o,
+    output logic [31:0] apb_rdata_o,
+    input  logic        parallel_done_i,
+    input  logic        parallel_word_done_i,
+    input  logic [31:0] parallel_rdata_i,
+    output logic        parallel_req_o,
+    output logic [15:0] parallel_addr_o,
+    output logic [1:0]  parallel_cmd_o,
+    output logic [31:0] parallel_wdata_o,
+    input  logic [31:0] ram_rdata,
+    output logic [4:0]  ram_addr,
+    output logic [31:0] ram_wdata,
+    output logic        ram_wr_en
+);
+    typedef enum logic [3:0] {
+        IDLE,
+        RAM_STREAM_WRITE,
+        RAM_STREAM_READ_ADDR,
+        RAM_STREAM_READ_DATA,
+        EXT_SINGLE_HANDLE,
+        EXT_STREAM_PREPARE,
+        EXT_STREAM_HANDLE,
+        EXT_STREAM_WAIT,
+        EXT_STREAM_WAIT_ACK,
+        DONE
+    } state_t;
+
+    state_t state, next_state_after_ack;
+    logic [1:0] word_cnt, load_cnt, unload_cnt;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            state      <= IDLE;
+            word_cnt   <= 2'b0;
+            load_cnt   <= 2'b0;
+            unload_cnt <= 2'b0;
+        end else begin
+            case (state)
+                IDLE: begin
+                    next_state_after_ack <= IDLE;
+                    if (apb_data_written_o) begin
+                        state <= RAM_STREAM_WRITE;
+                    end else if (apb_start_req) begin
+                        case (apb_cmd_i)
+                            2'b00, 2'b01: state <= EXT_SINGLE_HANDLE;
+                            2'b10, 2'b11: state <= EXT_STREAM_PREPARE;
+                            default:      state <= IDLE;
+                        endcase
+                    end
+                end
+
+                RAM_STREAM_WRITE: begin
+                    ram_addr  <= apb_addr_i[4:0] + load_cnt;
+                    ram_wdata <= apb_wdata_i;
+                    ram_wr_en <= 1'b1;
+                    load_cnt  <= load_cnt + 1'b1;
+                    state     <= IDLE;
+                end
+
+                RAM_STREAM_READ_ADDR: begin
+                    parallel_req_o <= 1'b0;
+                    ram_wr_en     <= 1'b0;
+                    ram_addr      <= apb_addr_i[4:0] + unload_cnt;
+                    state         <= RAM_STREAM_READ_DATA;
+                end
+
+                RAM_STREAM_READ_DATA: begin
+                    apb_rdata_o <= ram_rdata;
+                    if (apb_rdata_pop) begin
+                        if (unload_cnt == 2'd3) begin
+                            unload_cnt <= 2'd0;
+                            state      <= DONE;
+                        end else begin
+                            unload_cnt <= unload_cnt + 1'b1;
+                            state      <= RAM_STREAM_READ_ADDR;
+                        end
+                    end
+                end
+
+                EXT_SINGLE_HANDLE: begin
+                    apb_busy_o      <= 1'b1;
+                    parallel_req_o  <= 1'b1;
+                    parallel_addr_o <= apb_addr_i;
+                    if (apb_cmd_i[0] == 1'b1) begin
+                        parallel_cmd_o   <= 2'b01;
+                        parallel_wdata_o <= apb_wdata_i;
+                    end else begin
+                        parallel_cmd_o   <= 2'b00;
+                    end
+                    if (parallel_done_i) begin
+                        parallel_req_o <= 1'b0;
+                        if (apb_cmd_i[0] == 1'b0)
+                            apb_rdata_o <= parallel_rdata_i;
+                        state <= DONE;
+                    end
+                end
+
+                EXT_STREAM_PREPARE: begin
+                    apb_busy_o <= 1'b1;
+                    ram_wr_en  <= 1'b0;
+                    if (apb_cmd_i[0] == 1'b1)
+                        ram_addr <= apb_addr_i[4:0] + word_cnt;
+                    state <= EXT_STREAM_HANDLE;
+                end
+
+                EXT_STREAM_HANDLE: begin
+                    apb_busy_o <= 1'b1;
+                    ram_wr_en  <= 1'b0;
+                    if (!parallel_req_o) begin
+                        parallel_req_o  <= 1'b1;
+                        parallel_cmd_o  <= apb_cmd_i;
+                        parallel_addr_o <= apb_addr_i;
+                    end
+                    if (apb_cmd_i[0] == 1'b1)
+                        parallel_wdata_o <= ram_rdata;
+                    if (parallel_word_done_i) begin
+                        if (apb_cmd_i[0] == 1'b0) begin
+                            ram_wr_en <= 1'b1;
+                            ram_addr  <= apb_addr_i[4:0] + word_cnt;
+                            ram_wdata <= parallel_rdata_i;
+                        end
+                        if (word_cnt == 2'd3)
+                            next_state_after_ack <= EXT_STREAM_WAIT;
+                        else begin
+                            word_cnt <= word_cnt + 1'b1;
+                            next_state_after_ack <= EXT_STREAM_PREPARE;
+                        end
+                        state <= EXT_STREAM_WAIT_ACK;
+                    end
+                end
+
+                EXT_STREAM_WAIT: begin
+                    if (parallel_done_i) begin
+                        parallel_req_o <= 1'b0;
+                        if (apb_cmd_i[0] == 1'b0) begin
+                            apb_busy_o <= 1'b0;
+                            word_cnt   <= 2'b0;
+                            unload_cnt <= 2'd0;
+                            state      <= RAM_STREAM_READ_ADDR;
+                        end else begin
+                            state <= DONE;
+                        end
+                    end
+                end
+
+                EXT_STREAM_WAIT_ACK: begin
+                    apb_busy_o <= 1'b1;
+                    if (!parallel_word_done_i) begin
+                        ram_wr_en <= 1'b0;
+                        state     <= next_state_after_ack;
+                    end
+                end
+
+                DONE: begin
+                    apb_busy_o       <= 1'b0;
+                    parallel_req_o   <= 1'b0;
+                    parallel_cmd_o   <= 2'b00;
+                    parallel_addr_o  <= 16'h0000;
+                    parallel_wdata_o <= 32'h00000000;
+                    ram_wr_en        <= 1'b0;
+                    ram_wdata        <= 32'h00000000;
+                    word_cnt         <= 2'b0;
+                    load_cnt         <= 2'b0;
+                    state            <= IDLE;
+                end
+            endcase
+        end
+    end
+endmodule

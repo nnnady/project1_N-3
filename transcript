@@ -1,0 +1,12 @@
+# vsim work.tb_converter_top 
+# Loading sv_std.std
+# Loading work.tb_full_sv_unit
+# Loading work.tb_converter_top
+# Loading work.apb_if
+# Loading work.parallel_if
+# Loading work.converter_top
+# Loading work.apb_slave
+# Loading work.converter_ram
+# Loading work.parallel_master
+# Loading work.converter_fsm
+run -all
