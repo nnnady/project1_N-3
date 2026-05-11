@@ -11,13 +11,14 @@ module tb_converter_top;
     wire [15:0] ext_addr;
     wire [1:0]  ext_cmd;
     wire [15:0] ext_wdata, ext_rdata;
+    wire ext_half;
 
     converter_top dut (
         .clk, .rst_n,
         .psel, .penable, .pwrite, .paddr, .pwdata, .prdata, .pready, .pslverr,
         .ext_ready_i(ext_ready), .ext_ack_i(ext_ack), .ext_rdata_i(ext_rdata),
         .ext_addr_o(ext_addr), .ext_cmd_o(ext_cmd), .ext_data_o(ext_wdata),
-        .ext_stream_o(ext_stream), .ext_word_done_o(ext_word_done), .ext_tick_o(ext_tick)
+        .ext_stream_o(ext_stream), .ext_half_o(ext_half), .ext_word_done_o(ext_word_done), .ext_tick_o(ext_tick)
     );
 
     apb_if      apb_vif();
@@ -34,6 +35,7 @@ module tb_converter_top;
     assign paddr   = apb_vif.paddr;
     assign pwdata  = apb_vif.pwdata;
 
+    assign par_vif.ext_half = ext_half;
     assign par_vif.clk   = clk;
     assign par_vif.ext_addr = ext_addr;
     assign par_vif.ext_cmd  = ext_cmd;
@@ -73,10 +75,10 @@ module tb_converter_top;
             ext_drv.run();
         join_none
 
-        t1 = new(int_drv, sb, 16'h0010, 32'hA5A5A5A5);
+        t1 = new(int_drv, sb, 16'h0000, 32'hA5A5A5A5);
         t1.run();
 
-        t2 = new(int_drv, sb, 16'h0010, 32'hA5A5A5A5);
+        t2 = new(int_drv, sb, 16'h0000, 32'hA5A5A5A5);
         t2.run();
 
         t3 = new(int_drv, sb, 32'd2, 32'd6);

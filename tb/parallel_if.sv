@@ -10,4 +10,5 @@ interface parallel_if;
     logic        ext_word_done;
     logic        ext_stream;
     logic        ext_tick;
+    logic        ext_half;      // 0 = младшая половина, 1 = старшая
 endinterface

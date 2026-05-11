@@ -19,6 +19,7 @@ entity parallel_master is
         ext_data_o      : out    vl_logic_vector(15 downto 0);
         ext_stream_o    : out    vl_logic;
         ext_word_done_o : out    vl_logic;
-        ext_tick_o      : out    vl_logic
+        ext_tick_o      : out    vl_logic;
+        high_phase_o    : out    vl_logic
     );
 end parallel_master;

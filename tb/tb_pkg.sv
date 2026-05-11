@@ -207,13 +207,15 @@ class drv_ext;
                 t.wr_en = 0;
                 agent.handle_read(t);
 
-                // Младшие 16 бит
+                // Младшая половина
                 vif.ext_rdata = t.data[15:0];
                 vif.ext_ready = 1;
-                while (!vif.ext_word_done) @(posedge vif.clk);
+                // Ждём, пока мастер перейдёт в DATA_HIGH (high_phase=1)
+                while (vif.ext_half !== 1'b1) @(posedge vif.clk);
+                // Теперь мастер в DATA_HIGH, убираем ready, чтобы он не захватил старые данные
                 vif.ext_ready = 0;
 
-                // Старшие 16 бит
+                // Старшая половина
                 vif.ext_rdata = t.data[31:16];
                 vif.ext_ready = 1;
                 while (!vif.ext_word_done) @(posedge vif.clk);
@@ -247,6 +249,7 @@ virtual class ABC_TEST;
         logic [31:0] status;
         do begin
             drv.read(16'h0000, status);
+            @(posedge drv.vif.clk);   // ждём такт
         end while (status[0] != 0);
     endtask
 endclass

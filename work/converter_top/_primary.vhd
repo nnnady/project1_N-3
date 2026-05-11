@@ -20,6 +20,7 @@ entity converter_top is
         ext_data_o      : out    vl_logic_vector(15 downto 0);
         ext_stream_o    : out    vl_logic;
         ext_word_done_o : out    vl_logic;
-        ext_tick_o      : out    vl_logic
+        ext_tick_o      : out    vl_logic;
+        ext_half_o      : out    vl_logic
     );
 end converter_top;

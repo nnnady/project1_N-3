@@ -1,6 +1,7 @@
 module converter_top (
     input  logic        clk,
     input  logic        rst_n,
+    // APB
     input  logic        psel,
     input  logic        penable,
     input  logic        pwrite,
@@ -9,6 +10,7 @@ module converter_top (
     output logic [31:0] prdata,
     output logic        pready,
     output logic        pslverr,
+    // Внешний параллельный интерфейс
     input  logic        ext_ready_i,
     input  logic        ext_ack_i,
     input  logic [15:0] ext_rdata_i,
@@ -17,7 +19,8 @@ module converter_top (
     output logic [15:0] ext_data_o,
     output logic        ext_stream_o,
     output logic        ext_word_done_o,
-    output logic        ext_tick_o
+    output logic        ext_tick_o,
+    output logic        ext_half_o    // добавлено
 );
     logic apb_start_req, apb_busy, apb_data_written, apb_rdata_pop;
     logic [15:0] apb_addr;
@@ -53,7 +56,8 @@ module converter_top (
         .done_o(parallel_done), .word_done_o(parallel_word_done),
         .rdata_o(parallel_rdata),
         .ext_addr_o, .ext_cmd_o, .ext_data_o,
-        .ext_stream_o, .ext_word_done_o, .ext_tick_o
+        .ext_stream_o, .ext_word_done_o, .ext_tick_o,
+        .high_phase_o(ext_half_o)   // <-- подключение
     );
 
     converter_fsm u_fsm (

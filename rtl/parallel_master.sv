@@ -16,7 +16,8 @@ module parallel_master (
     output logic [15:0] ext_data_o,
     output logic        ext_stream_o,
     output logic        ext_word_done_o,
-    output logic        ext_tick_o
+    output logic        ext_tick_o,
+    output logic        high_phase_o     // 0 = DATA_LOW, 1 = DATA_HIGH
 );
     typedef enum logic [2:0] { IDLE, ADDR_PHASE, DATA_LOW, DATA_HIGH, WAIT_ACK } state_t;
 
@@ -30,6 +31,7 @@ module parallel_master (
     assign ext_tick_o      = tick;
     assign ext_word_done_o = word_done_o;
     assign ext_stream_o    = wr_i[1];
+    assign high_phase_o    = (state == DATA_HIGH) ? 1'b1 : 1'b0;
 
     // ƒелитель на 3
     always_ff @(posedge clk or negedge rst_n) begin
@@ -42,7 +44,6 @@ module parallel_master (
         end
     end
 
-    // ≈динственный синхронный процесс, управл€ющий всеми регистрами и выходами
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state       <= IDLE;
@@ -76,10 +77,10 @@ module parallel_master (
                         if (wr_i[0]) begin
                             data_low   <= wdata_i[15:0];
                             ext_data_o <= wdata_i[15:0];
-                            ext_cmd_o  <= 2'b11;  // WRITE
+                            ext_cmd_o  <= 2'b11;
                             state      <= DATA_HIGH;
                         end else begin
-                            ext_cmd_o  <= 2'b10;  // READ
+                            ext_cmd_o  <= 2'b10;
                             state      <= DATA_LOW;
                         end
                     end

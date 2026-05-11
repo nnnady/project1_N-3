@@ -22,20 +22,14 @@ module converter_fsm (
     output logic        ram_wr_en
 );
     typedef enum logic [3:0] {
-        IDLE,
-        RAM_STREAM_WRITE,
-        RAM_STREAM_READ_ADDR,
-        RAM_STREAM_READ_DATA,
-        EXT_SINGLE_HANDLE,
-        EXT_STREAM_PREPARE,
-        EXT_STREAM_HANDLE,
-        EXT_STREAM_WAIT,
-        EXT_STREAM_WAIT_ACK,
-        DONE
+        IDLE, RAM_STREAM_WRITE, RAM_STREAM_READ_ADDR, RAM_STREAM_READ_DATA,
+        EXT_SINGLE_HANDLE, EXT_STREAM_PREPARE, EXT_STREAM_HANDLE,
+        EXT_STREAM_WAIT, EXT_STREAM_WAIT_ACK, DONE
     } state_t;
 
     state_t state, next_state_after_ack;
     logic [1:0] word_cnt, load_cnt, unload_cnt;
+    logic [31:0] rdata_reg;   // чтобы не терять данные при возврате в IDLE
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -43,7 +37,19 @@ module converter_fsm (
             word_cnt   <= 2'b0;
             load_cnt   <= 2'b0;
             unload_cnt <= 2'b0;
+            rdata_reg  <= 32'b0;
         end else begin
+            // Значения по умолчанию (кроме apb_rdata_o)
+            apb_busy_o      <= 1'b0;
+            parallel_req_o  <= 1'b0;
+            ram_wr_en       <= 1'b0;
+            ram_wdata       <= 32'b0;
+            parallel_cmd_o  <= 2'b00;
+            parallel_addr_o <= 16'b0;
+            parallel_wdata_o<= 32'b0;
+            ram_addr        <= 5'b0;
+            apb_rdata_o     <= rdata_reg;   // по умолчанию сохраняем последнее чтение
+
             case (state)
                 IDLE: begin
                     next_state_after_ack <= IDLE;
@@ -52,8 +58,11 @@ module converter_fsm (
                     end else if (apb_start_req) begin
                         case (apb_cmd_i)
                             2'b00, 2'b01: state <= EXT_SINGLE_HANDLE;
-                            2'b10, 2'b11: state <= EXT_STREAM_PREPARE;
-                            default:      state <= IDLE;
+                            2'b10, 2'b11: begin
+                                word_cnt <= 2'b0;
+                                state <= EXT_STREAM_PREPARE;
+                            end
+                            default: state <= IDLE;
                         endcase
                     end
                 end
@@ -67,15 +76,14 @@ module converter_fsm (
                 end
 
                 RAM_STREAM_READ_ADDR: begin
-                    parallel_req_o <= 1'b0;
-                    ram_wr_en     <= 1'b0;
-                    ram_addr      <= apb_addr_i[4:0] + unload_cnt;
-                    state         <= RAM_STREAM_READ_DATA;
+                    ram_addr <= apb_addr_i[4:0] + unload_cnt;
+                    state    <= RAM_STREAM_READ_DATA;
                 end
 
                 RAM_STREAM_READ_DATA: begin
                     apb_rdata_o <= ram_rdata;
                     if (apb_rdata_pop) begin
+                        rdata_reg <= ram_rdata;
                         if (unload_cnt == 2'd3) begin
                             unload_cnt <= 2'd0;
                             state      <= DONE;
@@ -87,9 +95,9 @@ module converter_fsm (
                 end
 
                 EXT_SINGLE_HANDLE: begin
-                    apb_busy_o      <= 1'b1;
-                    parallel_req_o  <= 1'b1;
-                    parallel_addr_o <= apb_addr_i;
+                    apb_busy_o     <= 1'b1;
+                    parallel_req_o <= 1'b1;
+                    parallel_addr_o<= apb_addr_i;
                     if (apb_cmd_i[0] == 1'b1) begin
                         parallel_cmd_o   <= 2'b01;
                         parallel_wdata_o <= apb_wdata_i;
@@ -98,30 +106,30 @@ module converter_fsm (
                     end
                     if (parallel_done_i) begin
                         parallel_req_o <= 1'b0;
-                        if (apb_cmd_i[0] == 1'b0)
+                        if (apb_cmd_i[0] == 1'b0) begin
+                            rdata_reg <= parallel_rdata_i;
                             apb_rdata_o <= parallel_rdata_i;
+                        end
                         state <= DONE;
                     end
                 end
 
                 EXT_STREAM_PREPARE: begin
                     apb_busy_o <= 1'b1;
-                    ram_wr_en  <= 1'b0;
                     if (apb_cmd_i[0] == 1'b1)
                         ram_addr <= apb_addr_i[4:0] + word_cnt;
                     state <= EXT_STREAM_HANDLE;
                 end
 
                 EXT_STREAM_HANDLE: begin
-                    apb_busy_o <= 1'b1;
-                    ram_wr_en  <= 1'b0;
+                    apb_busy_o      <= 1'b1;
                     if (!parallel_req_o) begin
                         parallel_req_o  <= 1'b1;
                         parallel_cmd_o  <= apb_cmd_i;
-                        parallel_addr_o <= apb_addr_i;
+                        parallel_addr_o <= apb_addr_i + word_cnt;   // <-- ИНКРЕМЕНТ
+                        if (apb_cmd_i[0] == 1'b1)
+                            parallel_wdata_o <= ram_rdata;
                     end
-                    if (apb_cmd_i[0] == 1'b1)
-                        parallel_wdata_o <= ram_rdata;
                     if (parallel_word_done_i) begin
                         if (apb_cmd_i[0] == 1'b0) begin
                             ram_wr_en <= 1'b1;
@@ -142,8 +150,6 @@ module converter_fsm (
                     if (parallel_done_i) begin
                         parallel_req_o <= 1'b0;
                         if (apb_cmd_i[0] == 1'b0) begin
-                            apb_busy_o <= 1'b0;
-                            word_cnt   <= 2'b0;
                             unload_cnt <= 2'd0;
                             state      <= RAM_STREAM_READ_ADDR;
                         end else begin
@@ -161,16 +167,11 @@ module converter_fsm (
                 end
 
                 DONE: begin
-                    apb_busy_o       <= 1'b0;
-                    parallel_req_o   <= 1'b0;
-                    parallel_cmd_o   <= 2'b00;
-                    parallel_addr_o  <= 16'h0000;
-                    parallel_wdata_o <= 32'h00000000;
-                    ram_wr_en        <= 1'b0;
-                    ram_wdata        <= 32'h00000000;
-                    word_cnt         <= 2'b0;
-                    load_cnt         <= 2'b0;
-                    state            <= IDLE;
+                    apb_busy_o      <= 1'b0;
+                    parallel_req_o  <= 1'b0;
+                    word_cnt        <= 2'b0;
+                    load_cnt        <= 2'b0;
+                    state           <= IDLE;
                 end
             endcase
         end
