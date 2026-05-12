@@ -1,12 +1,20 @@
+// ============================================================================
+// Модуль: converter_ram
+// Назначение: Простое двухпортовое ОЗУ (32 слова по 32 бита) для хранения данных.
+// Используется конвертером при потоковых операциях.
+// Для варианта 11: данные хранятся в ОЗУ, сюда попадают и a0, a1 для прогрессии.
+// ============================================================================
 module converter_ram (
-    input  logic        clk,
-    input  logic [4:0]  addr,
-    input  logic [31:0] wdata,
-    input  logic        wr_en,
-    output logic [31:0] rdata
+    input  logic        clk,       // Тактовый сигнал
+    input  logic [4:0]  addr,      // Адрес (5 бит, 32 слова)
+    input  logic [31:0] wdata,     // Данные для записи
+    input  logic        wr_en,     // Разрешение записи
+    output logic [31:0] rdata      // Прочитанные данные (асинхронно по адресу)
 );
-    logic [31:0] mem [0:31];
+    logic [31:0] mem [0:31];       // Память 32 x 32
+
     always_ff @(posedge clk)
-        if (wr_en) mem[addr] <= wdata;
-    assign rdata = mem[addr];
+        if (wr_en) mem[addr] <= wdata;   // Синхронная запись
+
+    assign rdata = mem[addr];            // Асинхронное чтение (по текущему адресу)
 endmodule

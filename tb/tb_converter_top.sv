@@ -1,3 +1,6 @@
+// ============================================================================
+// Верхний уровень тестового стенда (Testbench)
+// ============================================================================
 `timescale 1ns/1ps
 import tb_pkg::*;
 
@@ -13,17 +16,25 @@ module tb_converter_top;
     wire [15:0] ext_wdata, ext_rdata;
     wire ext_half;
 
+    // ------------------------------------------------------------------------
+    // Тестируемое устройство (DUT)
+    // ------------------------------------------------------------------------
     converter_top dut (
         .clk, .rst_n,
         .psel, .penable, .pwrite, .paddr, .pwdata, .prdata, .pready, .pslverr,
         .ext_ready_i(ext_ready), .ext_ack_i(ext_ack), .ext_rdata_i(ext_rdata),
         .ext_addr_o(ext_addr), .ext_cmd_o(ext_cmd), .ext_data_o(ext_wdata),
-        .ext_stream_o(ext_stream), .ext_half_o(ext_half), .ext_word_done_o(ext_word_done), .ext_tick_o(ext_tick)
+        .ext_stream_o(ext_stream), .ext_half_o(ext_half),
+        .ext_word_done_o(ext_word_done), .ext_tick_o(ext_tick)
     );
 
+    // ------------------------------------------------------------------------
+    // Виртуальные интерфейсы для связи классов с сигналами
+    // ------------------------------------------------------------------------
     apb_if      apb_vif();
     parallel_if par_vif();
 
+    // Подключение APB интерфейса
     assign apb_vif.clk    = clk;
     assign apb_vif.rst_n  = rst_n;
     assign apb_vif.prdata = prdata;
@@ -35,12 +46,13 @@ module tb_converter_top;
     assign paddr   = apb_vif.paddr;
     assign pwdata  = apb_vif.pwdata;
 
+    // Подключение параллельного интерфейса
     assign par_vif.ext_half = ext_half;
     assign par_vif.clk   = clk;
     assign par_vif.ext_addr = ext_addr;
     assign par_vif.ext_cmd  = ext_cmd;
     assign par_vif.ext_wdata= ext_wdata;
-    assign par_vif.ext_done = dut.u_master.done_o;
+    assign par_vif.ext_done = dut.u_master.done_o;      // Наблюдение внутреннего сигнала done
     assign par_vif.ext_word_done = ext_word_done;
     assign par_vif.ext_stream   = ext_stream;
     assign par_vif.ext_tick     = ext_tick;
@@ -48,47 +60,56 @@ module tb_converter_top;
     assign ext_ack   = par_vif.ext_ack;
     assign ext_rdata = par_vif.ext_rdata;
 
+    // Генератор тактовой частоты (период 10 нс -> 100 МГц)
     always #5 clk = ~clk;
 
+    // Объекты тестовой инфраструктуры
     scoreboard  sb;
     drv_int     int_drv;
     agent_ext   agent;
     drv_ext     ext_drv;
 
+    // Объекты тестов
     test_single_write       t1;
     test_single_read        t2;
     test_geom_progression   t3;
     test_pslverr            t4;
 
+    // ------------------------------------------------------------------------
+    // Главный процесс моделирования
+    // ------------------------------------------------------------------------
     initial begin
         clk = 0; rst_n = 0;
-        repeat(5) @(posedge clk);
+        repeat(5) @(posedge clk);   // Сброс на 5 тактов
         rst_n = 1;
-        repeat(2) @(posedge clk);
+        repeat(2) @(posedge clk);   // Ожидание выхода из сброса
 
+        // Создание объектов
         sb      = new();
         agent   = new(sb);
         int_drv = new(apb_vif);
         ext_drv = new(par_vif, agent);
 
+        // Запуск драйвера внешнего интерфейса в параллельном потоке
         fork
             ext_drv.run();
         join_none
 
-        t1 = new(int_drv, sb, 16'h0000, 32'hA5A5A5A5);
+        // Выполнение тестов
+        t1 = new(int_drv, sb, 16'h0000, 32'hA5A5A5A5);   // Одиночная запись
         t1.run();
 
-        t2 = new(int_drv, sb, 16'h0000, 32'hA5A5A5A5);
+        t2 = new(int_drv, sb, 16'h0000, 32'hA5A5A5A5);   // Одиночное чтение
         t2.run();
 
-        t3 = new(int_drv, sb, 32'd2, 32'd6);
+        t3 = new(int_drv, sb, 32'd2, 32'd6);              // Геометрическая прогрессия: a0=2, a1=6
         t3.run();
 
-        t4 = new(int_drv, sb);
+        t4 = new(int_drv, sb);                           // Проверка ошибок PSLVERR
         t4.run();
 
         #1000;
-        sb.report();
+        sb.report();   // Печать итогов
         $finish;
     end
 endmodule
