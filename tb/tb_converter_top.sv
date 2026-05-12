@@ -74,6 +74,8 @@ module tb_converter_top;
     test_single_read        t2;
     test_geom_progression   t3;
     test_pslverr            t4;
+    test_stream_write       t5;
+    test_stream_read        t6;
 
     // ------------------------------------------------------------------------
     // Главный процесс моделирования
@@ -107,6 +109,16 @@ module tb_converter_top;
 
         t4 = new(int_drv, sb);                           // Проверка ошибок PSLVERR
         t4.run();
+
+        t5 = new(int_drv, sb, 5'h10,
+         32'h1111_1111, 32'h2222_2222, 32'h3333_3333, 32'h4444_4444);
+        t5.run();
+
+        t6 = new(int_drv, sb, 5'h4,
+         32'hCAFE_0001, 32'hCAFE_0002, 32'hCAFE_0003, 32'hCAFE_0004);
+        t6.run();
+
+        repeat(50) @(posedge clk);   // пауза, чтобы внешний мастер вышел из состояний
 
         #1000;
         sb.report();   // Печать итогов

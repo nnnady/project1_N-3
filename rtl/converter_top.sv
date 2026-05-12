@@ -63,7 +63,7 @@ module converter_top (
     // Экземпляр ОЗУ (32x32)
     // ------------------------------------------------------------------------
     converter_ram u_ram (
-        .clk, .addr(ram_addr), .wdata(ram_wdata), .wr_en(ram_wr_en), .rdata(ram_rdata)
+        .clk, .rst_n, .addr(ram_addr), .wdata(ram_wdata), .wr_en(ram_wr_en), .rdata(ram_rdata)
     );
 
     // ------------------------------------------------------------------------

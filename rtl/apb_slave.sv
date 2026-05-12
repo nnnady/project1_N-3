@@ -93,9 +93,9 @@ module apb_slave (
     // ========================================================================
     always_comb begin
         if (psel && penable) begin
-            if ((pwrite && paddr == 16'h0000) ||       // Запись статуса
-                (!pwrite && paddr == 16'h0004) ||      // Чтение регистра управления
-                !(paddr inside {16'h0000,16'h0004,16'h0008,16'h000C,16'h0010})) // Неверный адрес
+            if ((pwrite && paddr == 16'h0000) ||
+                (!pwrite && paddr == 16'h0004) ||
+                ((paddr != 16'h0000) && (paddr != 16'h0004) && (paddr != 16'h0008) && (paddr != 16'h000C) && (paddr != 16'h0010)))
                 pslverr = 1'b1;
             else
                 pslverr = 1'b0;

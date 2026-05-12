@@ -3,7 +3,7 @@
 // ============================================================================
 `timescale 1ns/1ps
 package tb_pkg;
-
+    localparam VERBOSE = 0;   // 1 – подробный лог, 0 – только важное
     // ------------------------------------------------------------------------
     // Класс-контейнер для транзакции (передаётся между компонентами)
     // ------------------------------------------------------------------------
@@ -155,7 +155,7 @@ package tb_pkg;
 
         // Задача записи в регистр APB
         task write(input [15:0] addr, input [31:0] data);
-            $display("[%0t] APB WRITE INITIATED: Addr=0x%0h, Data=0x%0h", $time, addr, data);
+            if (VERBOSE) $display("[%0t] APB WRITE INITIATED: Addr=0x%0h, Data=0x%0h", $time, addr, data);
             @(posedge vif.clk);
             vif.psel    = 1;
             vif.penable = 0;       // Первый такт – адресная фаза
@@ -168,13 +168,13 @@ package tb_pkg;
             @(posedge vif.clk);
             vif.psel    = 0;
             vif.penable = 0;
-            $display("[%0t] APB WRITE COMPLETED: Addr=0x%0h, Data=0x%0h, %s",
+            if (VERBOSE) $display("[%0t] APB WRITE COMPLETED: Addr=0x%0h, Data=0x%0h, %s",
                      $time, addr, data, vif.pslverr ? "FAILED (SLVERR)" : "SUCCESS");
         endtask
 
         // Задача чтения из регистра APB
         task read(input [15:0] addr, output [31:0] data);
-            $display("[%0t] APB READ INITIATED: Addr=0x%0h", $time, addr);
+            if (VERBOSE) $display("[%0t] APB READ INITIATED: Addr=0x%0h", $time, addr);
             @(posedge vif.clk);
             vif.psel    = 1;
             vif.penable = 0;
@@ -187,89 +187,95 @@ package tb_pkg;
             @(posedge vif.clk);
             vif.psel    = 0;
             vif.penable = 0;
-            $display("[%0t] APB READ COMPLETED: Addr=0x%0h, Data=0x%0h, %s",
+            if (VERBOSE) $display("[%0t] APB READ COMPLETED: Addr=0x%0h, Data=0x%0h, %s",
                      $time, addr, data, vif.pslverr ? "FAILED (SLVERR)" : "SUCCESS");
         endtask
     endclass
 
-    // ------------------------------------------------------------------------
-    // Драйвер внешнего параллельного интерфейса – ведомый (эмулирует agent_ext)
-    // ------------------------------------------------------------------------
-    class drv_ext;
-        virtual parallel_if vif;
-        agent_ext agent;
+// ============================================================================
+// Драйвер внешнего параллельного интерфейса (исправленная версия)
+// Поддерживает одиночные и потоковые транзакции.
+// ============================================================================
+class drv_ext;
+    virtual parallel_if vif;
+    agent_ext agent;
 
-        function new(virtual parallel_if vif, agent_ext agent);
-            this.vif = vif;
-            this.agent = agent;
-        endfunction
+    function new(virtual parallel_if vif, agent_ext agent);
+        this.vif = vif;
+        this.agent = agent;
+    endfunction
 
-        // Основной поток обработки транзакций от конвертера
-        task run();
-            trans_t t;
-            logic [15:0] wdata_low;
+    // Основной цикл обработки: перехватываем начало транзакции,
+    // затем в цикле обрабатываем все слова, пока не получим done,
+    // и только после done ждём возврата ext_cmd в 00.
+    task run();
+        trans_t t;
+        logic [15:0] wdata_low;
 
-            forever begin
-                // Ждём начала транзакции (любое изменение ext_cmd)
-                while (vif.ext_cmd == 2'b00) @(posedge vif.clk);
-                $display("[%0t] EXT: Transaction started, cmd=0x%0h", $time, vif.ext_cmd);
+        forever begin
+            // Ждём начала любой активности (ext_cmd != 00)
+            while (vif.ext_cmd == 2'b00) @(posedge vif.clk);
+            if (VERBOSE) $display("[%0t] EXT: Transaction started, cmd=0x%0h", $time, vif.ext_cmd);
 
-                // Фаза адреса: выставляем ready, пока команда «адрес»
+            // Обрабатываем все слова, пока не будет поднят done
+            while (!vif.ext_done) begin
+                // === Адресная фаза ===
                 vif.ext_ready = 1;
                 while (vif.ext_cmd == 2'b01) @(posedge vif.clk);
-                $display("[%0t] EXT: Addr phase done, addr=0x%0h", $time, vif.ext_addr);
+                if (VERBOSE) $display("[%0t] EXT: Addr phase done, addr=0x%0h", $time, vif.ext_addr);
                 vif.ext_ready = 0;
 
                 t = new();
-                t.addr = vif.ext_addr[4:0];   // Используем только младшие 5 бит для адреса памяти
+                t.addr = vif.ext_addr[4:0];   // только младшие 5 бит
 
-                if (vif.ext_cmd == 2'b11) begin       // Команда записи (данные на шине)
-                    $display("[%0t] EXT: Write data phase started", $time);
-                    wdata_low = vif.ext_wdata;
-                    // Ждём завершения передачи слова (word_done)
+                // === Фаза данных (запись или чтение) ===
+                if (vif.ext_cmd == 2'b11) begin       // Запись
+                    if (VERBOSE) $display("[%0t] EXT: Write data phase started", $time);
+                    wdata_low = vif.ext_wdata;        // младшая половина уже на шине
+                    // Ждём завершения слова (word_done)
                     while (!vif.ext_word_done) @(posedge vif.clk);
                     t.wr_en = 1;
-                    t.data = {vif.ext_wdata, wdata_low};  // Старшая + младшая половины
+                    t.data = {vif.ext_wdata, wdata_low};   // собираем 32 бита
                     agent.handle_write(t);
-                    $display("[%0t] EXT: Write data received: 0x%0h", $time, t.data);
+                    if (VERBOSE) $display("[%0t] EXT: Write data received: 0x%0h", $time, t.data);
 
-                    // Подтверждение транзакции
-                    vif.ext_ack = 1;
-                    while (!vif.ext_done) @(posedge vif.clk);
-                    vif.ext_ack = 0;
-                    $display("[%0t] EXT: Write transaction completed", $time);
-                end else begin                       // Команда чтения (конвертер ждёт данные)
-                    $display("[%0t] EXT: Read data phase started", $time);
+                end else begin                       // Чтение (ext_cmd == 2'b10)
+                    if (VERBOSE) $display("[%0t] EXT: Read data phase started", $time);
                     t.wr_en = 0;
-                    agent.handle_read(t);            // Получаем данные из памяти агента
+                    agent.handle_read(t);            // получаем данные от агента
 
-                    // Передаём младшую половину
+                    // Младшая половина
                     vif.ext_rdata = t.data[15:0];
                     vif.ext_ready = 1;
-                    // Ждём, пока мастер перейдёт в фазу DATA_HIGH (старшая половина)
+                    // Ждём, пока мастер перейдёт в DATA_HIGH (high_phase=1)
                     while (vif.ext_half !== 1'b1) @(posedge vif.clk);
                     vif.ext_ready = 0;
 
-                    // Передаём старшую половину
+                    // Старшая половина
                     vif.ext_rdata = t.data[31:16];
                     vif.ext_ready = 1;
                     while (!vif.ext_word_done) @(posedge vif.clk);
                     vif.ext_ready = 0;
-
-                    $display("[%0t] EXT: Read data sent: 0x%0h", $time, t.data);
-
-                    // Подтверждение
-                    vif.ext_ack = 1;
-                    while (!vif.ext_done) @(posedge vif.clk);
-                    vif.ext_ack = 0;
-                    $display("[%0t] EXT: Read transaction completed", $time);
+                    if (VERBOSE) $display("[%0t] EXT: Read data sent: 0x%0h", $time, t.data);
                 end
 
-                // Ждём окончания транзакции (ext_cmd вернётся в 00)
-                while (vif.ext_cmd != 2'b00) @(posedge vif.clk);
+                // === Подтверждение (ack) ===
+                vif.ext_ack = 1;
+                // Держим ack, пока мастер не уберёт word_done (покинет WAIT_ACK)
+                while (vif.ext_word_done) @(posedge vif.clk);
+                vif.ext_ack = 0;
+
+                // Ждём либо следующей адресной фазы, либо завершения всей транзакции
+                while (!(vif.ext_done || vif.ext_cmd == 2'b01)) @(posedge vif.clk);
             end
-        endtask
-    endclass
+
+            // Транзакция полностью завершена (done = 1).
+            // Ждём возврата шины в idle (ext_cmd = 00)
+            while (vif.ext_cmd != 2'b00) @(posedge vif.clk);
+            if (VERBOSE) $display("[%0t] EXT: Transaction completed", $time);
+        end
+    endtask
+endclass
 
     // ------------------------------------------------------------------------
     // Базовый класс для тестов (ABC – абстрактный)
@@ -421,5 +427,91 @@ package tb_pkg;
             else                            sb.fail("PSLVERR invalid address should be blocked");
         endtask
     endclass
+// ===========================================================================
+// Тест "потоковая запись" (Stream Write)
+// Проверяет команду 2: запись 4 слов в ОЗУ с последующей передачей наружу.
+// ===========================================================================
+class test_stream_write extends ABC_TEST;
+    logic [4:0]  base_addr;   // базовый адрес в ОЗУ (5 бит)
+    logic [31:0] wdata[4];    // массив 4 записываемых слов
+
+    function new(drv_int drv, scoreboard sb, logic [4:0] base,
+                 logic [31:0] d0, d1, d2, d3);
+        super.new(drv, sb, "stream write");
+        base_addr = base;
+        wdata[0] = d0; wdata[1] = d1; wdata[2] = d2; wdata[3] = d3;
+    endfunction
+
+    task run();
+        $display("\n=== %s ===", name);
+
+        for (int i = 0; i < 4; i++)
+            sb.expect_write(base_addr + i, wdata[i]);
+
+        // Потоковая запись
+        drv.write(16'h0008, {11'b0, base_addr});
+        drv.write(16'h000C, 32'h2);                // команда потоковой записи
+        foreach (wdata[i])
+            drv.write(16'h0010, wdata[i]);         // четыре слова данных
+        drv.write(16'h0004, 32'h1);                // старт
+        drv.write(16'h0004, 32'h0);
+        wait_busy_done();
+
+        // Проверка: одиночные чтения через конвертер
+        for (int i = 0; i < 4; i++) begin
+            logic [31:0] rd;
+            // Установить адрес
+            drv.write(16'h0008, {11'b0, base_addr + i});
+            // Команда чтения
+            drv.write(16'h000C, 32'h0);
+            // Запуск
+            drv.write(16'h0004, 32'h1);
+            drv.write(16'h0004, 32'h0);
+            wait_busy_done();
+            // Прочитать данные
+            drv.read(16'h0010, rd);
+            $display("Addr 0x%0h = 0x%0h (expected 0x%0h)", base_addr + i, rd, wdata[i]);
+        end
+    endtask
+endclass
+
+// ===========================================================================
+// Тест "потоковое чтение" (Stream Read)
+// Проверяет команду 3: чтение 4 слов из внешнего агента через ОЗУ в APB.
+// Предварительно заполняем память агента одиночными записями.
+// ===========================================================================
+class test_stream_read extends ABC_TEST;
+    logic [4:0]  base_addr;
+    logic [31:0] expected[4];
+
+    function new(drv_int drv, scoreboard sb, logic [4:0] base,
+                 logic [31:0] e0, e1, e2, e3);
+        super.new(drv, sb, "stream read");
+        base_addr = base;
+        expected[0] = e0; expected[1] = e1; expected[2] = e2; expected[3] = e3;
+    endfunction
+
+    task run();
+        $display("\n=== %s ===", name);
+
+        // 1. Заполняем память агента одиночными записями
+        for (int i = 0; i < 4; i++) begin
+            sb.expect_write(base_addr + i, expected[i]);
+            drv.write(16'h0008, {11'b0, base_addr + i});
+            drv.write(16'h000C, 32'h1);
+            drv.write(16'h0010, expected[i]);
+            drv.write(16'h0004, 32'h1);
+            drv.write(16'h0004, 32'h0);
+            wait_busy_done();
+        end
+
+        // 2. Потоковое чтение (команда 3)
+        drv.write(16'h0008, {11'b0, base_addr});
+        drv.write(16'h000C, 32'h3);
+        drv.write(16'h0004, 32'h1);
+        drv.write(16'h0004, 32'h0);
+        wait_busy_done();
+    endtask
+endclass
 
 endpackage
