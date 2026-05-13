@@ -119,7 +119,7 @@ module tb_converter_top;
         t6.run();
 
         repeat(50) @(posedge clk);   // пауза, чтобы внешний мастер вышел из состояний
-
+    
         #1000;
         sb.report();   // Печать итогов
         $finish;
