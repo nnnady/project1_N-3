@@ -1,24 +1,32 @@
 module converter_fsm (
-    input  logic        clk, rst_n,
+    input  logic        clk, rst_n, //тактовые сигналы
+    //сигналы от apb_slave:
     input  logic [15:0] apb_addr_i,
     input  logic [31:0] apb_wdata_i,
     input  logic [1:0]  apb_cmd_i,
     input  logic        apb_start_req,
     input  logic        apb_data_written_o,
     input  logic        apb_rdata_pop,
-    output logic        apb_busy_o,
-    output logic [31:0] apb_rdata_o,
-    input  logic        parallel_done_i,
-    input  logic        parallel_word_done_i,
-    input  logic [31:0] parallel_rdata_i,
-    output logic        parallel_req_o,
-    output logic [15:0] parallel_addr_o,
-    output logic [1:0]  parallel_cmd_o,
-    output logic [31:0] parallel_wdata_o,
-    input  logic [31:0] ram_rdata,
-    output logic [4:0]  ram_addr,
-    output logic [31:0] ram_wdata,
-    output logic        ram_wr_en
+
+    output logic        apb_busy_o, //сигнал занятости, подключается к регистру статуса в apb
+    output logic [31:0] apb_rdata_o, //подключается к входу fsm_wdata_i в apb_slave
+
+    //сигналы от parallel_master:
+    input  logic        parallel_done_i, //поднимаем в 1 если вся транзакция завершена
+    input  logic        parallel_word_done_i, //поднимаем в 1 если 1 слово передано/принято
+    input  logic [31:0] parallel_rdata_i, //данные которые мастер прочитал с внешней шины
+
+    //сигналы управления мастером:
+    output logic        parallel_req_o, //запрос на выполнение транзакции (если надо передать / принять)
+    output logic [15:0] parallel_addr_o, //адрес для внешней шины
+    output logic [1:0]  parallel_cmd_o, //текущая команда для мастера
+    output logic [31:0] parallel_wdata_o, // данные
+
+    //сигналы для работы с внутренним озу:
+    input  logic [31:0] ram_rdata, //данные прочитанные из озу
+    output logic [4:0]  ram_addr, // адрес в озу
+    output logic [31:0] ram_wdata, //данные для записи в озу
+    output logic        ram_wr_en //разрешенные записи в озу
 );
 
     // --------------------------------------------------------------
@@ -26,9 +34,9 @@ module converter_fsm (
     // --------------------------------------------------------------
     typedef enum logic [3:0] {
         IDLE,                   // Ожидание команды или записи данных
-        RAM_STREAM_WRITE,       // Приём одного слова из APB в RAM (для потоковой записи)
-        RAM_STREAM_READ_ADDR,   // Установка адреса RAM для выгрузки данных (потоковое чтение)
-        RAM_STREAM_READ_DATA,   // Чтение из RAM и ожидание, пока процессор заберёт данные
+        RAM_STREAM_WRITE,       // Приём одного слова из APB в озу (для потоковой записи)
+        RAM_STREAM_READ_ADDR,   // Установка адреса озу для выгрузки данных (потоковое чтение)
+        RAM_STREAM_READ_DATA,   // Чтение из озу и ожидание, пока процессор заберёт данные
         EXT_SINGLE_HANDLE,      // Обработка одиночной внешней транзакции (чтение/запись)
         EXT_STREAM_PREPARE,     // Подготовка к передаче одного слова потоковой операции
         EXT_STREAM_HANDLE,      // Непосредственная передача/приём одного слова
@@ -37,10 +45,10 @@ module converter_fsm (
         DONE                    // Завершение операции, сброс сигналов
     } state_t;
 
-    state_t state, next_state_after_ack;
+    state_t state, next_state_after_ack; //текущее состояние автомата и вспомогательная переменная которая хранит в какое состояние перейти после WAIT_ACK 
     logic [1:0] word_cnt;       // Текущее слово в потоке (0..3)
-    logic [1:0] load_cnt;       // Счётчик записанных в RAM слов (для потоковой записи)
-    logic [1:0] unload_cnt;     // Счётчик выгруженных из RAM слов (для потокового чтения)
+    logic [1:0] load_cnt;       // Счётчик записанных в озу слов (для потоковой записи)
+    logic [1:0] unload_cnt;     // Счётчик выгруженных из озу слов (для потокового чтения)
     logic [31:0] rdata_reg;     // Регистр для временного хранения прочитанных данных
 
     // --------------------------------------------------------------
@@ -111,9 +119,9 @@ module converter_fsm (
                 RAM_STREAM_WRITE: begin
                     ram_addr  <= apb_addr_i[4:0] + load_cnt;
                     ram_wdata <= apb_wdata_i;
-                    ram_wr_en <= 1'b1;
+                    ram_wr_en <= 1'b1;//разрешение записи
                     load_cnt  <= load_cnt + 1'b1;
-                    state     <= IDLE;   // после каждого слова возвращаемся в IDLE
+                    state     <= IDLE;   // после каждого слова возвращаемся в IDLE, чтобы принять след слово или закончить
                 end
 
                 // ----------------------------------------------------------
@@ -129,17 +137,22 @@ module converter_fsm (
                 // заберёт данные через APB (сигнал apb_rdata_pop)
                 // ----------------------------------------------------------
                 RAM_STREAM_READ_DATA: begin
+                    // Выставить данные из RAM на шину APB (процессор увидит их при чтении 0x10)
                     apb_rdata_o <= ram_rdata;
+                    // Если процессор прочитал регистр данных (сигнал от APB)
                     if (apb_rdata_pop) begin
+                        // Сохранить прочитанное значение в резервный регистр
                         rdata_reg <= ram_rdata;
+                        // Проверить, было ли это четвёртое слово (unload_cnt == 3)
                         if (unload_cnt == 2'd3) begin
-                            unload_cnt <= 2'd0;
-                            state      <= DONE;
+                            unload_cnt <= 2'd0;   // сбросить счётчик
+                            state <= DONE;        // завершить операцию
                         end else begin
-                            unload_cnt <= unload_cnt + 1'b1;
-                            state      <= RAM_STREAM_READ_ADDR;
+                            unload_cnt <= unload_cnt + 1'b1;          // следующий номер слова
+                            state <= RAM_STREAM_READ_ADDR;             // перейти к установке нового адреса
                         end
                     end
+                    // Если чтения не было – остаёмся в этом состоянии, ждём
                 end
 
                 // ----------------------------------------------------------
@@ -181,7 +194,7 @@ module converter_fsm (
                 end
 
                 // ----------------------------------------------------------
-                // EXT_STREAM_HANDLE – активная передача одного слова
+                // EXT_STREAM_HANDLE – обработка 1 слова потока
                 // Для записи: данные берутся из RAM (ram_rdata)
                 // Для чтения: полученные данные сохраняются в RAM
                 // ----------------------------------------------------------

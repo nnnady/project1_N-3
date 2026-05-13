@@ -23,7 +23,7 @@ module converter_ram (
     // ------------------------------------------------------------
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            // Сброс: зануляем все ячейки памяти (синтезируется в инициализацию BRAM/регистров)
+            // Сброс: зануляем все ячейки памяти 
             for (int i = 0; i < 32; i++) 
                 mem[i] <= 32'h0;
         end else if (wr_en) begin
