@@ -38,14 +38,14 @@ module apb_slave (
     logic        CTRL_REG;   // Регистр управления (0x04): запись 1 – старт
 
     // Формирование сигнала apb_rdata_pop: фронт сигнала чтения данных
-    logic apb_rdata_valid;
-    logic apb_rdata_valid_r;
+    logic apb_rdata_valid; // сигнал чтения регистра данных
+    logic apb_rdata_valid_r; // запоминатель предыдущего значения
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) apb_rdata_valid_r <= 1'b0;
         else        apb_rdata_valid_r <= apb_rdata_valid;
     end
-    assign apb_rdata_pop = apb_rdata_valid && !apb_rdata_valid_r; // Переход 0->1
+    assign apb_rdata_pop = apb_rdata_valid && !apb_rdata_valid_r; // Переход 0->1 (говорит fsm, что процессор только что прочитал данные)
 
     // ========================================================================
     // Логика записи в регистры по APB
